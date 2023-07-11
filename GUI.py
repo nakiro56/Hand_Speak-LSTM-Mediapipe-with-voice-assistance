@@ -1,3 +1,4 @@
+import threading
 import customtkinter as ctk
 import cv2
 import mediapipe as mp
@@ -7,25 +8,12 @@ import pyttsx3
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
 
-
 class HandSpeakWindow:
-    def __init__(self, appearance_mode='light', title='Hand-Speak', geometry='200x200'):
-
-        ctk.set_appearance_mode(appearance_mode)
+    def __init__(self, appearance_mode='light', title='Hand-Speak', geometry='400x600'):
 
         self.window = ctk.CTk()
         self.window.title(title)
         self.window.geometry(geometry)
-        window_width = 200  # replace with your window width
-        window_height = 200  # replace with your window height
-        screen_width = self.window.winfo_screenwidth()
-        screen_height = self.window.winfo_screenheight()
-
-        position_top = int(screen_height / 2 - window_height / 2)
-        position_right = int(screen_width / 2 - window_width / 2)
-
-        self.window.geometry(f"{window_width}x{window_height}+{position_right}+{position_top}")
-
 
         self.label = ctk.CTkLabel(
             self.window,
@@ -41,9 +29,20 @@ class HandSpeakWindow:
             self.window,
             text='Start',
             hover_color='#AA0',
-            command=lambda: self.run_detection()
+            command=self.start_detection
         )
         self.button.pack()
+
+        self.stop_button = ctk.CTkButton(
+            self.window,
+            text='Stop',
+            hover_color='#AA0',
+            command=self.stop_detection
+        )
+        self.stop_button.pack()
+
+        self.running = False
+        self.thread = None
 
         self.mp_holistic = mp.solutions.holistic
         self.mp_drawing = mp.solutions.drawing_utils
@@ -100,12 +99,24 @@ class HandSpeakWindow:
         rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
         return np.concatenate([pose, face, lh, rh])
 
+    def start_detection(self):
+        self.running = True
+        self.thread = threading.Thread(target=self.run_detection)
+        self.thread.start()
+
+    def stop_detection(self):
+        self.running = False
+        if self.thread is not None:
+            self.thread.join()
+
     def run_detection(self):
         cap = cv2.VideoCapture(0)
         spoken = False
         previous_word = None
         with self.mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
             while cap.isOpened():
+                if not self.running:
+                    break
                 ret, frame = cap.read()
                 image, results = self.mediapipe_detection(frame, holistic)
                 self.draw_styled_landmarks(image, results)
@@ -127,24 +138,24 @@ class HandSpeakWindow:
 
                 if self.predicted_word != previous_word:
                     if self.last_action != self.predicted_word or (self.last_action_update_time is not None and time.time() - self.last_action_update_time > 1.0):
-                        self.engine.say(self.predicted_word)
-                        self.engine.runAndWait()
+                        threading.Thread(target=self.speak_word, args=(self.predicted_word,)).start()
                         self.last_action = self.predicted_word
                         self.last_action_update_time = time.time()
-                        previous_word = self.predicted_word
 
-                cv2.imshow('OpenCV Feed', image)
+                cv2.imshow('Hand-Speak', image)
 
                 if cv2.waitKey(10) & 0xFF == ord('q'):
                     break
-            cap.release()
-            cv2.destroyAllWindows()
+        cap.release()
+        cv2.destroyAllWindows()
 
-    def run(self):
+    def speak_word(self, word):
+        self.engine.say(word)
+        self.engine.runAndWait()
+
+    def mainloop(self):
         self.window.mainloop()
 
-# Create an instance of the HandSpeakWindow class
-hand_speak_window = HandSpeakWindow()
-
-# Run the window
-hand_speak_window.run()
+if __name__ == "__main__":
+    hand_speak = HandSpeakWindow()
+    hand_speak.mainloop()
