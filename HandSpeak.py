@@ -1,9 +1,9 @@
-import threading
 import customtkinter as ctk
 import cv2
 import mediapipe as mp
 import numpy as np
 import time
+import tkinter
 import pyttsx3
 from keras.models import Sequential
 from keras.layers import LSTM, Dense
@@ -11,7 +11,9 @@ from keras.layers import LSTM, Dense
 class HandSpeakWindow:
     def __init__(self, appearance_mode='light', title='Hand-Speak', geometry='400x600'):
 
-        self.window = ctk.CTk()
+        ctk.set_appearance_mode(appearance_mode)
+
+        self.window = tkinter.Tk()
         self.window.title(title)
         self.window.geometry(geometry)
 
@@ -29,32 +31,20 @@ class HandSpeakWindow:
             self.window,
             text='Start',
             hover_color='#AA0',
-            command=self.start_detection
+            command=lambda: self.run_detection()
         )
         self.button.pack()
-
-        self.stop_button = ctk.CTkButton(
-            self.window,
-            text='Stop',
-            hover_color='#AA0',
-            command=self.stop_detection
-        )
-        self.stop_button.pack()
-
-        self.running = False
-        self.thread = None
 
         self.mp_holistic = mp.solutions.holistic
         self.mp_drawing = mp.solutions.drawing_utils
         self.last_action = None
         self.last_action_update_time = None
-        self.actions = actions = np.array(['Yes', 'What', 'Thank you','Take-out', 'Please', 'No','How Much','Hello','Food','Dine-in'])
-        # self.actions = np.array(['Yes', 'Please', 'No', 'Bathroom', 'Where'])
+        self.actions = np.array(['Yes', 'What', 'Thank you', 'Take-out', 'Please', 'No', 'How Much', 'Hello', 'Food', 'Dine-in'])
         self.no_sequences = 30
         self.sequence_length = 30
         self.sequence = []
         self.engine = pyttsx3.init()
-        self.threshold = 0.6
+        self.threshold = 0.56
         self.predicted_word = None
 
         self.model = Sequential()
@@ -64,8 +54,11 @@ class HandSpeakWindow:
         self.model.add(Dense(64, activation='relu'))
         self.model.add(Dense(32, activation='relu'))
         self.model.add(Dense(self.actions.shape[0], activation='softmax'))
-        self.model.load_weights('ModelTry.h5')
 
+        self.model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
+        self.model.load_weights('ModelTry.h5')
+        self.is_capturing = False
+        self.capturing_start_time = None
     def mediapipe_detection(self, image, model):
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -99,63 +92,74 @@ class HandSpeakWindow:
         rh = np.array([[res.x, res.y, res.z] for res in results.right_hand_landmarks.landmark]).flatten() if results.right_hand_landmarks else np.zeros(21*3)
         return np.concatenate([pose, face, lh, rh])
 
-    def start_detection(self):
-        self.running = True
-        self.thread = threading.Thread(target=self.run_detection)
-        self.thread.start()
-
-    def stop_detection(self):
-        self.running = False
-        if self.thread is not None:
-            self.thread.join()
-
     def run_detection(self):
         cap = cv2.VideoCapture(0)
         spoken = False
         previous_word = None
         with self.mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
             while cap.isOpened():
-                if not self.running:
-                    break
                 ret, frame = cap.read()
                 image, results = self.mediapipe_detection(frame, holistic)
                 self.draw_styled_landmarks(image, results)
                 keypoints = self.extract_keypoints(results)
                 self.sequence.append(keypoints)
                 self.sequence = self.sequence[-30:]
-                if len(self.sequence) == 30:
-                    res = self.model.predict(np.expand_dims(self.sequence, axis=0))[0]
-                    print(self.actions[np.argmax(res)])
-                    if res[np.argmax(res)] > self.threshold:
-                        if self.predicted_word is None or time.time() - self.last_action_update_time > 1.7:
-                            self.predicted_word = self.actions[np.argmax(res)]
-                            self.last_action_update_time = time.time()
 
-                cv2.rectangle(image, (0,0), (640, 40), (245, 117, 16), -1)
+                # Check if capturing is ongoing
+                if self.is_capturing:
+                    if self.capturing_start_time is None:
+                        self.capturing_start_time = time.time()
+
+                    # Calculate remaining time for capturing
+                    remaining_time = 3 - (time.time() - self.capturing_start_time)
+                    if remaining_time <= 0:
+                        self.is_capturing = False
+                        self.capturing_start_time = None
+                        res = self.model.predict(np.expand_dims(self.sequence, axis=0))[0]
+                        self.predicted_word = self.actions[np.argmax(res)]
+                        self.engine.say(self.predicted_word)
+                        self.engine.runAndWait()
+
+                    # Render capturing message with remaining time
+                    message = f"Capturing for {max(int(remaining_time), 0)}"
+                    cv2.putText(image, message, (int(image.shape[1]/2) - 25, int(image.shape[0]/2) + 25),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 2, cv2.LINE_AA)
+
+                cv2.rectangle(image, (0, 0), (640, 40), (245, 117, 16), -1)
                 if self.predicted_word is not None:
-                    cv2.putText(image, self.predicted_word, (int(image.shape[1]/2 - 20*len(self.predicted_word)/2),30),
+                    cv2.putText(image, self.predicted_word, (int(image.shape[1]/2 - 20*len(self.predicted_word)/2), 30),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
                 if self.predicted_word != previous_word:
-                    if self.last_action != self.predicted_word or (self.last_action_update_time is not None and time.time() - self.last_action_update_time > 1.0):
-                        threading.Thread(target=self.speak_word, args=(self.predicted_word,)).start()
+                    if self.last_action != self.predicted_word or (self.last_action_update_time is not None and time.time() - self.last_action_update_time > 1.5):
+                        self.engine.say(self.predicted_word)
+                        self.engine.runAndWait()
                         self.last_action = self.predicted_word
                         self.last_action_update_time = time.time()
+                        previous_word = self.predicted_word
 
-                cv2.imshow('Hand-Speak', image)
+                cv2.imshow('OpenCV Feed', image)
 
-                if cv2.waitKey(10) & 0xFF == ord('q'):
+                # Listen for key events
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
                     break
+                elif key == ord('r'):
+                    self.is_capturing = True
+                    self.capturing_start_time = None
+                    self.predicted_word = None
+                    self.last_action = None
+                    self.last_action_update_time = None
+
         cap.release()
         cv2.destroyAllWindows()
 
-    def speak_word(self, word):
-        self.engine.say(word)
-        self.engine.runAndWait()
 
-    def mainloop(self):
+    def run(self):
         self.window.mainloop()
 
-if __name__ == "__main__":
-    hand_speak = HandSpeakWindow()
-    hand_speak.mainloop()
+# Create an instance of the HandSpeakWindow class
+hand_speak_window = HandSpeakWindow()
+
+# Run the window
+hand_speak_window.run()
