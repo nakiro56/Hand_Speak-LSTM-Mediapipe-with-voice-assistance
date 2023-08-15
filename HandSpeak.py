@@ -56,7 +56,7 @@ class HandSpeakWindow:
         self.model.add(Dense(self.actions.shape[0], activation='softmax'))
 
         self.model.compile(optimizer='Adam', loss='categorical_crossentropy', metrics=['categorical_accuracy'])
-        self.model.load_weights('ModelTry.h5')
+        self.model.load_weights('FINAL_MODEL_C.h5')
         self.is_capturing = False
         self.capturing_start_time = None
     def mediapipe_detection(self, image, model):
