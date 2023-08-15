@@ -2,7 +2,7 @@
 
 ## Installing Dependencies
   #### -- After cloning the repo, run the requirements.txt to install following dependencies
-  #### -- Once the dependencies have installed, you can run the GUI.py
+  #### -- Once the dependencies have installed, you can run the HandSpeak.py
 
 ## Training another Dataset
   #### -- Train another dataset by using the file Train.ipynb
